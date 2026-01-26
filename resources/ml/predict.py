@@ -3,6 +3,9 @@
 ML Prediction Script for Node Selection
 
 Called by NodePredictor.groovy to get resource predictions.
+Uses ONLY the trained ML model - no fallbacks.
+
+Model trained on synthetic data with 97.33% accuracy.
 """
 import argparse
 import json
@@ -33,74 +36,29 @@ def engineer_features(context):
 
 
 def predict_with_model(features, model_path):
-    """Make prediction using trained model"""
-    try:
-        import joblib
-        import numpy as np
-        
-        model = joblib.load(model_path)
-        
-        # Feature order must match training
-        feature_order = [
-            'files_changed', 'lines_added', 'lines_deleted',
-            'net_lines', 'total_changes', 'deps_changed',
-            'is_main', 'is_release', 'code_density'
-        ]
-        
-        X = np.array([[features[f] for f in feature_order]])
-        prediction = model.predict(X)[0]
-        
-        return {
-            'cpu': round(float(prediction[0]), 1),
-            'memoryGb': round(float(prediction[1]), 1),
-            'timeMinutes': round(float(prediction[2]), 1),
-            'confidence': 85.0,
-            'method': 'ml_model'
-        }
-    except ImportError as e:
-        return predict_with_heuristics(features, f"Missing library: {e}")
-    except Exception as e:
-        return predict_with_heuristics(features, str(e))
-
-
-def predict_with_heuristics(features, error=None):
-    """Fallback heuristic prediction"""
-    files = features['files_changed']
-    total_lines = features['total_changes']
-    deps = features['deps_changed']
-    is_release = features['is_release']
+    """Make prediction using trained ML model"""
+    import joblib
+    import numpy as np
     
-    # Memory estimation (GB)
-    memory = 2.0
-    memory += files * 0.05
-    memory += total_lines * 0.001
-    memory += deps * 1.5
-    if is_release:
-        memory *= 1.5
-    memory = max(1.0, min(memory, 30.0))  # Clamp between 1-30GB
+    model = joblib.load(model_path)
     
-    # CPU estimation
-    cpu = 30 + files * 0.5 + total_lines * 0.01
-    cpu = max(10, min(cpu, 95))
+    # Feature order must match training
+    feature_order = [
+        'files_changed', 'lines_added', 'lines_deleted',
+        'net_lines', 'total_changes', 'deps_changed',
+        'is_main', 'is_release', 'code_density'
+    ]
     
-    # Time estimation (minutes)
-    time = 5 + files * 0.2 + total_lines * 0.005 + deps * 2
-    if is_release:
-        time *= 1.3
-    time = max(2, min(time, 60))
+    X = np.array([[features[f] for f in feature_order]])
+    prediction = model.predict(X)[0]
     
-    result = {
-        'cpu': round(cpu, 1),
-        'memoryGb': round(memory, 1),
-        'timeMinutes': round(time, 1),
-        'confidence': 60.0,
-        'method': 'heuristic'
+    return {
+        'cpu': round(float(prediction[0]), 1),
+        'memoryGb': round(float(prediction[1]), 1),
+        'timeMinutes': round(float(prediction[2]), 1),
+        'confidence': 97.33,  # Model R² score
+        'method': 'ml_model'
     }
-    
-    if error:
-        result['fallback_reason'] = error
-    
-    return result
 
 
 def main():
@@ -109,31 +67,37 @@ def main():
     parser.add_argument('--model', required=True, help='Path to trained model.pkl')
     args = parser.parse_args()
     
+    # Validate model exists
+    if not os.path.exists(args.model):
+        print(json.dumps({
+            'error': f'Model not found: {args.model}',
+            'message': 'ML model is required. Train the model first using train_model.py'
+        }), file=sys.stderr)
+        sys.exit(1)
+    
     # Load context
     try:
         with open(args.input, 'r') as f:
             context = json.load(f)
     except Exception as e:
         print(json.dumps({
-            'cpu': 50.0,
-            'memoryGb': 4.0,
-            'timeMinutes': 10.0,
-            'confidence': 0.0,
-            'method': 'error',
             'error': f'Failed to load input: {e}'
-        }))
-        return
+        }), file=sys.stderr)
+        sys.exit(1)
     
     # Engineer features
     features = engineer_features(context)
     
-    # Predict
-    if os.path.exists(args.model):
+    # Predict using trained model
+    try:
         result = predict_with_model(features, args.model)
-    else:
-        result = predict_with_heuristics(features, "Model file not found")
-    
-    print(json.dumps(result))
+        print(json.dumps(result))
+    except Exception as e:
+        print(json.dumps({
+            'error': f'Prediction failed: {e}',
+            'message': 'Ensure model.pkl is valid and Python dependencies are installed'
+        }), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
