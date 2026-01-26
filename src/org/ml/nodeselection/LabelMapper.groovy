@@ -18,11 +18,11 @@ class LabelMapper implements Serializable {
     
     // AWS instance configurations
     static final Map<String, Map> INSTANCES = [
-        'lightweight': [memory: 1, instance: 'T3a Small', cost: 0.0047, executors: 1],
-        'executor':    [memory: 2, instance: 'T3a Small', cost: 0.0094, executors: 3],
-        'build':       [memory: 8, instance: 'T3a Large', cost: 0.0376, executors: 2],
-        'test':        [memory: 16, instance: 'T3a X Large', cost: 0.0752, executors: 1],
-        'heavytest':   [memory: 32, instance: 'T3a 2X Large', cost: 0.1504, executors: 1]
+        'lightweight': [memory: 1, instance: 'T3a Small', executors: 1],
+        'executor':    [memory: 2, instance: 'T3a Small', executors: 3],
+        'build':       [memory: 8, instance: 'T3a Large', executors: 2],
+        'test':        [memory: 16, instance: 'T3a X Large', executors: 1],
+        'heavytest':   [memory: 32, instance: 'T3a 2X Large', executors: 1]
     ]
     
     /**
@@ -61,36 +61,10 @@ class LabelMapper implements Serializable {
     }
     
     /**
-     * Get hourly cost for the selected instance
-     */
-    double getHourlyCost(String label) {
-        return INSTANCES[label]?.cost ?: 0.0
-    }
-    
-    /**
      * Get all available labels
      */
     List<String> getAllLabels() {
         return INSTANCES.keySet().toList()
-    }
-    
-    /**
-     * Calculate potential savings compared to always using largest
-     */
-    Map calculateSavings(String selectedLabel, double buildTimeHours) {
-        double selectedCost = INSTANCES[selectedLabel]?.cost ?: 0.0
-        double maxCost = INSTANCES['heavytest']?.cost ?: 0.0
-        
-        double actualCost = selectedCost * buildTimeHours
-        double maxBasedCost = maxCost * buildTimeHours
-        double savings = maxBasedCost - actualCost
-        
-        return [
-            selectedCost: actualCost.round(4),
-            worstCaseCost: maxBasedCost.round(4),
-            savings: savings.round(4),
-            savingsPercent: maxBasedCost > 0 ? (savings / maxBasedCost * 100).round(1) : 0
-        ]
     }
     
     /**
@@ -100,6 +74,6 @@ class LabelMapper implements Serializable {
         def config = INSTANCES[label]
         if (!config) return "Unknown label: ${label}"
         
-        return "${label} → ${config.instance} (${config.memory}GB, \$${config.cost}/hr)"
+        return "${label} → ${config.instance} (${config.memory}GB)"
     }
 }

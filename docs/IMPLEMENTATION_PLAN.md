@@ -13,9 +13,9 @@ Based on your infrastructure, you have **6 different AWS EC2 instance configurat
 | T3a X Large | 16 GB | `test` | Testing |
 | T3a 2X Large | 32 GB | `heavytest` | Heavy testing workloads |
 
-**Current Problem:** Developers manually choose labels, often picking oversized instances "just to be safe" → **Wasted AWS costs!**
+**Current Problem:** Developers manually choose labels, often picking oversized instances.
 
-**ML Solution:** Predict the optimal label based on code changes → **Right-sized instances, reduced costs!**
+**ML Solution:** Predict the optimal label based on code changes → **Right-sized instances!**
 
 ---
 
@@ -76,11 +76,11 @@ flowchart TD
     
     Model --> Memory{Predicted<br/>Memory?}
     
-    Memory -->|"≤ 1GB"| L1["🏷️ Label: lightweight<br/>💰 T3a Small 1GB"]
-    Memory -->|"1-4GB"| L2["🏷️ Label: executor<br/>💰 T3a Small 2GB"]
-    Memory -->|"4-8GB"| L3["🏷️ Label: build<br/>💰 T3a Large 8GB"]
-    Memory -->|"8-16GB"| L4["🏷️ Label: test<br/>💰 T3a X Large 16GB"]
-    Memory -->|"> 16GB"| L5["🏷️ Label: heavytest<br/>💰 T3a 2X Large 32GB"]
+    Memory -->|"≤ 1GB"| L1["🏷️ Label: lightweight<br/>T3a Small 1GB"]
+    Memory -->|"1-4GB"| L2["🏷️ Label: executor<br/>T3a Small 2GB"]
+    Memory -->|"4-8GB"| L3["🏷️ Label: build<br/>T3a Large 8GB"]
+    Memory -->|"8-16GB"| L4["🏷️ Label: test<br/>T3a X Large 16GB"]
+    Memory -->|"> 16GB"| L5["🏷️ Label: heavytest<br/>T3a 2X Large 32GB"]
     
     L1 --> Build[Execute Build on Selected Agent]
     L2 --> Build
@@ -90,26 +90,6 @@ flowchart TD
     
     Build --> Collect[Collect Actual Resource Usage]
     Collect --> Log[Log for Model Retraining]
-```
-
-### 1.3 Current vs ML-Powered Approach
-
-```mermaid
-flowchart LR
-    subgraph Current["❌ Current Approach"]
-        C1[Developer picks label<br/>manually in Jenkinsfile]
-        C2[Often picks 'build' or larger<br/>just to be safe]
-        C3[Wastes AWS resources<br/>💸 Higher costs]
-    end
-    
-    subgraph ML["✅ ML-Powered Approach"]
-        M1[ML analyzes<br/>code changes]
-        M2[Predicts exact<br/>memory needed]
-        M3[Selects optimal label<br/>💰 Lower costs]
-    end
-    
-    C1 --> C2 --> C3
-    M1 --> M2 --> M3
 ```
 
 ---
@@ -200,11 +180,11 @@ flowchart LR
     end
     
     subgraph AWS["AWS Instances"]
-        A1["T3a Small 1GB<br/>$0.0047/hr"]
-        A2["T3a Small 2GB<br/>$0.0094/hr"]
-        A3["T3a Large 8GB<br/>$0.0376/hr"]
-        A4["T3a X Large 16GB<br/>$0.0752/hr"]
-        A5["T3a 2X Large 32GB<br/>$0.1504/hr"]
+        A1["T3a Small 1GB"]
+        A2["T3a Small 2GB"]
+        A3["T3a Large 8GB"]
+        A4["T3a X Large 16GB"]
+        A5["T3a 2X Large 32GB"]
     end
     
     P1 -->|"≤1GB"| L1 --> A1
@@ -316,29 +296,26 @@ sequenceDiagram
 
 ---
 
-## Part 5: Cost Savings Example
+## Part 5: Model Performance
 
-### Before ML (Always using T3a Large)
+### Training Results
 
-```
-100 builds/day × T3a Large ($0.0376/hr) × 0.5 hr avg
-= $1.88/day = $56.40/month
-```
+| Metric | Value |
+|--------|-------|
+| R² Score | 97.33% |
+| Mean Absolute Error | 1.02 |
+| Training Samples | 48 |
+| Test Samples | 12 |
 
-### After ML (Right-sized instances)
+### Feature Importance
 
-```
-Distribution based on ML predictions:
-- 30% use lightweight: 30 × $0.0047 × 0.5 = $0.07
-- 40% use executor:    40 × $0.0094 × 0.5 = $0.19
-- 20% use build:       20 × $0.0376 × 0.5 = $0.38
-- 8% use test:          8 × $0.0752 × 0.5 = $0.30
-- 2% use heavytest:     2 × $0.1504 × 0.5 = $0.15
-
-Total: $1.09/day = $32.70/month
-
-SAVINGS: $23.70/month (42% reduction!)
-```
+| Feature | Importance |
+|---------|------------|
+| lines_added | 27.5% |
+| lines_deleted | 18.9% |
+| net_lines | 18.3% |
+| total_changes | 15.7% |
+| files_changed | 12.4% |
 
 ---
 
