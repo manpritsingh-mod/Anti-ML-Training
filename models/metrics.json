@@ -1,0 +1,17 @@
+{
+  "r2_score": 0.9733,
+  "mae": 1.0211,
+  "training_samples": 48,
+  "test_samples": 12,
+  "feature_importance": {
+    "lines_added": 0.2753,
+    "lines_deleted": 0.1889,
+    "net_lines": 0.1826,
+    "total_changes": 0.1567,
+    "files_changed": 0.1239,
+    "deps_changed": 0.0451,
+    "code_density": 0.0247,
+    "is_release": 0.0028,
+    "is_main": 0.0001
+  }
+}

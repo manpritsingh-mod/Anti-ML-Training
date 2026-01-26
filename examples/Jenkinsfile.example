@@ -1,0 +1,130 @@
+/**
+ * Example Jenkinsfile using ML Node Selector
+ * 
+ * This pipeline demonstrates:
+ * 1. ML-based node selection
+ * 2. Building on the predicted node
+ * 3. Collecting metrics for model training
+ * 4. Comparing predicted vs actual usage
+ */
+
+@Library('ml-node-selector') _
+
+pipeline {
+    agent none  // Agent selected dynamically by ML
+    
+    parameters {
+        choice(
+            name: 'BUILD_TYPE',
+            choices: ['debug', 'release'],
+            description: 'Build type (release needs more resources)'
+        )
+    }
+    
+    environment {
+        BUILD_ID = "${env.JOB_NAME}-${env.BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('🤖 ML Node Selection') {
+            agent { label 'master' }  // Quick analysis on master
+            steps {
+                checkout scm
+                
+                script {
+                    // Get ML prediction for optimal node
+                    def prediction = selectNode(
+                        buildType: params.BUILD_TYPE
+                    )
+                    
+                    // Store results for display
+                    env.SELECTED_LABEL = prediction.label
+                    env.SELECTED_INSTANCE = prediction.instanceType
+                    env.PREDICTED_MEMORY = prediction.predictedMemoryGb
+                    env.PREDICTED_CPU = prediction.predictedCpu
+                    env.PREDICTED_TIME = prediction.predictedTimeMinutes
+                    
+                    echo """
+                    ╔════════════════════════════════════════════╗
+                    ║       ML NODE SELECTION COMPLETE           ║
+                    ╠════════════════════════════════════════════╣
+                    ║ Label:    ${prediction.label.padRight(30)}║
+                    ║ Instance: ${prediction.instanceType.padRight(30)}║
+                    ║ Memory:   ${prediction.predictedMemoryGb} GB${' '.multiply(24)}║
+                    ║ CPU:      ${prediction.predictedCpu}%${' '.multiply(26)}║
+                    ╚════════════════════════════════════════════╝
+                    """
+                }
+            }
+        }
+        
+        stage('🏗️ Build') {
+            agent { label "${env.ML_SELECTED_LABEL}" }  // Use ML-selected label!
+            steps {
+                checkout scm
+                
+                script {
+                    // Start metrics collection for model training
+                    collectBuildMetrics.start(
+                        buildId: env.BUILD_ID
+                    )
+                    
+                    echo "Building on ${env.SELECTED_INSTANCE} (${env.SELECTED_LABEL})"
+                    
+                    // ========================================
+                    // YOUR ACTUAL BUILD STEPS GO HERE
+                    // ========================================
+                    
+                    // Example: Gradle build
+                    // sh './gradlew clean build'
+                    
+                    // Example: Maven build
+                    // sh 'mvn clean package'
+                    
+                    // Example: npm build
+                    // sh 'npm install && npm run build'
+                    
+                    // For demo, just sleep
+                    echo "Simulating build..."
+                    sleep(time: 30, unit: 'SECONDS')
+                    
+                    // ========================================
+                    // END OF BUILD STEPS
+                    // ========================================
+                    
+                    // Stop collection and get actual metrics
+                    def actual = collectBuildMetrics.stop(
+                        buildId: env.BUILD_ID,
+                        status: 'SUCCESS',
+                        buildType: params.BUILD_TYPE
+                    )
+                    
+                    // Display comparison
+                    echo """
+                    ╔════════════════════════════════════════════╗
+                    ║       PREDICTION vs ACTUAL                 ║
+                    ╠════════════════════════════════════════════╣
+                    ║ Metric      │ Predicted │ Actual           ║
+                    ╠═════════════╪═══════════╪══════════════════╣
+                    ║ Memory (GB) │ ${env.PREDICTED_MEMORY.padRight(9)} │ ${actual.memory.toString().padRight(18)}║
+                    ║ CPU (%)     │ ${env.PREDICTED_CPU.padRight(9)} │ ${actual.cpu.toString().padRight(18)}║
+                    ║ Time (min)  │ ${env.PREDICTED_TIME.padRight(9)} │ ${(actual.duration/60).round(1).toString().padRight(18)}║
+                    ╚════════════════════════════════════════════╝
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo "Build completed on ${env.SELECTED_LABEL} (${env.SELECTED_INSTANCE})"
+        }
+        success {
+            echo "✅ Build successful!"
+        }
+        failure {
+            echo "❌ Build failed!"
+        }
+    }
+}
