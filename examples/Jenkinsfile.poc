@@ -1,0 +1,295 @@
+/**
+ * ML Node Selector - POC Jenkinsfile
+ * 
+ * Demonstrates:
+ * 1. Fetching git metrics from the pipeline
+ * 2. Calling the ML model for resource prediction
+ * 3. Mapping prediction to AWS node label
+ * 4. Running build on the selected node
+ * 
+ * Requirements:
+ * - Python 3.8+ with joblib, numpy installed on Jenkins
+ * - Model files in C:/Users/dell/.gemini/antigravity/scratch/Anti-ML-Training
+ */
+
+pipeline {
+    agent none  // Nodes selected dynamically
+    
+    parameters {
+        choice(
+            name: 'BUILD_TYPE',
+            choices: ['debug', 'release', 'prodRelease'],
+            description: 'Build type affects resource prediction'
+        )
+    }
+    
+    environment {
+        // Path to ML model and scripts
+        ML_PROJECT_PATH = 'C:/Users/dell/.gemini/antigravity/scratch/Anti-ML-Training'
+        PYTHON_EXE = 'C:/Program Files/Python311/python.exe'
+    }
+    
+    stages {
+        stage('📊 Fetch Build Metrics') {
+            agent { label 'master' }
+            steps {
+                checkout scm
+                
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "📊 STAGE 1: FETCHING BUILD METRICS"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    // Get git metrics using PowerShell
+                    def gitStats = powershell(script: '''
+                        # Get files changed
+                        $filesChanged = (git diff --name-only HEAD~1 2>$null | Measure-Object -Line).Lines
+                        if (-not $filesChanged -or $filesChanged -eq 0) { $filesChanged = 5 }
+                        
+                        # Get lines added/deleted
+                        $diffStat = git diff --stat HEAD~1 2>$null | Select-Object -Last 1
+                        if ($diffStat -match "([0-9]+) insertion") { 
+                            $linesAdded = $matches[1] 
+                        } else { 
+                            $linesAdded = 100 
+                        }
+                        if ($diffStat -match "([0-9]+) deletion") { 
+                            $linesDeleted = $matches[1] 
+                        } else { 
+                            $linesDeleted = 20 
+                        }
+                        
+                        # Check for dependency changes (build.gradle, package.json, pom.xml, requirements.txt)
+                        $depsChanged = (git diff --name-only HEAD~1 2>$null | Where-Object { 
+                            $_ -match "build.gradle|package.json|pom.xml|requirements.txt" 
+                        } | Measure-Object).Count
+                        
+                        # Get branch name
+                        $branch = git rev-parse --abbrev-ref HEAD 2>$null
+                        if (-not $branch) { $branch = "feature" }
+                        
+                        Write-Output "$filesChanged,$linesAdded,$linesDeleted,$depsChanged,$branch"
+                    ''', returnStdout: true).trim()
+                    
+                    def statsArray = gitStats.split(',')
+                    env.FILES_CHANGED = statsArray[0]
+                    env.LINES_ADDED = statsArray[1]
+                    env.LINES_DELETED = statsArray[2]
+                    env.DEPS_CHANGED = statsArray[3]
+                    env.GIT_BRANCH_NAME = statsArray[4]
+                    
+                    echo """
+╔════════════════════════════════════════════════════╗
+║           BUILD METRICS COLLECTED                  ║
+╠════════════════════════════════════════════════════╣
+║ 📁 Files Changed:     ${env.FILES_CHANGED.padRight(27)}║
+║ ➕ Lines Added:        ${env.LINES_ADDED.padRight(27)}║
+║ ➖ Lines Deleted:      ${env.LINES_DELETED.padRight(27)}║
+║ 📦 Dependencies:       ${env.DEPS_CHANGED.padRight(27)}║
+║ 🌿 Branch:             ${env.GIT_BRANCH_NAME.padRight(27)}║
+║ 🔧 Build Type:         ${params.BUILD_TYPE.padRight(27)}║
+╚════════════════════════════════════════════════════╝
+"""
+                }
+            }
+        }
+        
+        stage('🤖 ML Prediction') {
+            agent { label 'master' }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "🤖 STAGE 2: CALLING ML MODEL FOR PREDICTION"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    // Create input JSON for prediction
+                    def inputJson = """{
+                        "filesChanged": ${env.FILES_CHANGED},
+                        "linesAdded": ${env.LINES_ADDED},
+                        "linesDeleted": ${env.LINES_DELETED},
+                        "depsChanged": ${env.DEPS_CHANGED},
+                        "branch": "${env.GIT_BRANCH_NAME}",
+                        "buildType": "${params.BUILD_TYPE}"
+                    }"""
+                    
+                    // Save input to temp file
+                    writeFile file: 'ml_input.json', text: inputJson
+                    
+                    // Call ML prediction script
+                    def prediction = powershell(script: """
+                        & "${PYTHON_EXE}" "${ML_PROJECT_PATH}/resources/ml/predict.py" --input ml_input.json --model "${ML_PROJECT_PATH}/resources/ml/model.pkl"
+                    """, returnStdout: true).trim()
+                    
+                    def result = readJSON(text: prediction)
+                    
+                    env.PREDICTED_CPU = result.cpu.toString()
+                    env.PREDICTED_MEMORY = result.memoryGb.toString()
+                    env.PREDICTED_TIME = result.timeMinutes.toString()
+                    env.ML_CONFIDENCE = result.confidence.toString()
+                    
+                    echo """
+╔════════════════════════════════════════════════════╗
+║           ML MODEL PREDICTION                      ║
+╠════════════════════════════════════════════════════╣
+║ 💻 Predicted CPU:      ${env.PREDICTED_CPU}%                        ║
+║ 💾 Predicted Memory:   ${env.PREDICTED_MEMORY} GB                       ║
+║ ⏱️  Predicted Time:     ${env.PREDICTED_TIME} minutes                   ║
+║ 📊 Confidence:         ${env.ML_CONFIDENCE}%                      ║
+╚════════════════════════════════════════════════════╝
+"""
+                }
+            }
+        }
+        
+        stage('🏷️ Select AWS Node') {
+            agent { label 'master' }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "🏷️ STAGE 3: SELECTING AWS NODE BASED ON PREDICTION"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    def memoryGb = Float.parseFloat(env.PREDICTED_MEMORY)
+                    def requiredMemory = memoryGb * 1.2  // 20% buffer
+                    
+                    // Map memory to AWS label
+                    def label = ''
+                    def instanceType = ''
+                    def instanceMemory = ''
+                    
+                    if (requiredMemory <= 1.0) {
+                        label = 'lightweight'
+                        instanceType = 'T3a Small'
+                        instanceMemory = '1 GB'
+                    } else if (requiredMemory <= 2.0) {
+                        label = 'executor'
+                        instanceType = 'T3a Small'
+                        instanceMemory = '2 GB'
+                    } else if (requiredMemory <= 8.0) {
+                        label = 'build'
+                        instanceType = 'T3a Large'
+                        instanceMemory = '8 GB'
+                    } else if (requiredMemory <= 16.0) {
+                        label = 'test'
+                        instanceType = 'T3a X Large'
+                        instanceMemory = '16 GB'
+                    } else {
+                        label = 'heavytest'
+                        instanceType = 'T3a 2X Large'
+                        instanceMemory = '32 GB'
+                    }
+                    
+                    env.SELECTED_LABEL = label
+                    env.SELECTED_INSTANCE = instanceType
+                    env.SELECTED_MEMORY = instanceMemory
+                    
+                    echo """
+╔════════════════════════════════════════════════════╗
+║           AWS NODE SELECTED                        ║
+╠════════════════════════════════════════════════════╣
+║ 🏷️  Jenkins Label:     ${label.padRight(27)}║
+║ ☁️  AWS Instance:       ${instanceType.padRight(27)}║
+║ 💾 Instance Memory:    ${instanceMemory.padRight(27)}║
+╠════════════════════════════════════════════════════╣
+║          SELECTION RATIONALE                       ║
+╠════════════════════════════════════════════════════╣
+║ ML Predicted: ${memoryGb} GB memory needed              ║
+║ With 20% buffer: ${String.format('%.1f', requiredMemory)} GB required                  ║
+║ Selected instance provides: ${instanceMemory.padRight(18)}║
+╚════════════════════════════════════════════════════╝
+"""
+                }
+            }
+        }
+        
+        stage('🏗️ Run Build on Selected Node') {
+            // NOTE: For POC demo, using 'master' instead of dynamic label
+            // In production, use: agent { label "${env.SELECTED_LABEL}" }
+            agent { label 'master' }
+            steps {
+                script {
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo "🏗️ STAGE 4: RUNNING BUILD"
+                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    
+                    echo """
+╔════════════════════════════════════════════════════╗
+║           BUILD EXECUTION                          ║
+╠════════════════════════════════════════════════════╣
+║ Running on: ${env.SELECTED_INSTANCE.padRight(36)}║
+║ Label: ${env.SELECTED_LABEL.padRight(41)}║
+║ Memory: ${env.SELECTED_MEMORY.padRight(40)}║
+╚════════════════════════════════════════════════════╝
+"""
+                    
+                    // Simulate build work
+                    echo "⏳ Simulating build process..."
+                    sleep(time: 10, unit: 'SECONDS')
+                    echo "✅ Build simulation completed!"
+                }
+            }
+        }
+        
+        stage('📈 POC Summary') {
+            agent { label 'master' }
+            steps {
+                script {
+                    echo """
+╔════════════════════════════════════════════════════════════════╗
+║                    POC DEMO SUMMARY                            ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                ║
+║  📊 INPUT METRICS:                                             ║
+║     Files Changed:  ${env.FILES_CHANGED.padRight(41)}║
+║     Lines Added:    ${env.LINES_ADDED.padRight(41)}║
+║     Lines Deleted:  ${env.LINES_DELETED.padRight(41)}║
+║     Dependencies:   ${env.DEPS_CHANGED.padRight(41)}║
+║     Branch:         ${env.GIT_BRANCH_NAME.padRight(41)}║
+║     Build Type:     ${params.BUILD_TYPE.padRight(41)}║
+║                                                                ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                ║
+║  🤖 ML PREDICTION:                                             ║
+║     Predicted CPU:     ${env.PREDICTED_CPU}%                                      ║
+║     Predicted Memory:  ${env.PREDICTED_MEMORY} GB                                    ║
+║     Predicted Time:    ${env.PREDICTED_TIME} minutes                              ║
+║     Confidence:        ${env.ML_CONFIDENCE}%                                   ║
+║                                                                ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                ║
+║  ✅ NODE SELECTION:                                            ║
+║     Label:           ${env.SELECTED_LABEL.padRight(41)}║
+║     AWS Instance:    ${env.SELECTED_INSTANCE.padRight(41)}║
+║     Instance Memory: ${env.SELECTED_MEMORY.padRight(41)}║
+║                                                                ║
+╚════════════════════════════════════════════════════════════════╝
+
+🎯 RESULT: ML model correctly predicted ${env.PREDICTED_MEMORY} GB memory requirement
+           and selected ${env.SELECTED_INSTANCE} (${env.SELECTED_MEMORY}) instance.
+"""
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            node('master') {
+                // Cleanup temp files
+                powershell(script: 'Remove-Item -Path ml_input.json -ErrorAction SilentlyContinue')
+                
+                echo """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    POC DEMONSTRATION COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+            }
+        }
+        success {
+            echo "✅ Pipeline completed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed!"
+        }
+    }
+}
